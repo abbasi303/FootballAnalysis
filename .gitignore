@@ -1,4 +1,4 @@
-# Ignore virtual environment folder
+# Ignore virtual environment fol
 myenv/
 football-players-detection-1/
 *__pycahce__*
