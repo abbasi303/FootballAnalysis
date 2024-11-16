@@ -10,39 +10,115 @@ from utils import get_bbox_width,get_center_of_bbox
 import random
 import numpy as np
 import pandas as pd
+from pykalman import KalmanFilter
+
 
 class Tracker:
     def __init__(self, model_path):
         self.model=YOLO(model_path)
         self.tracker=sv.ByteTrack()
 
-    def interpolate_ball_positions(self, ball_positions):
-        # Extract bounding boxes from the ball_positions, regardless of the key
-        extracted_positions = []
-        for frame_data in ball_positions:
-            if frame_data:  # Check if the frame data is not empty
-                # Extract the first key's bbox
-                bbox = list(frame_data.values())[0].get('bbox', [])
-                extracted_positions.append(bbox)
-            else:
-                extracted_positions.append([])  # No data for this frame
-
-        #print("Extracted ball positions before interpolation:", extracted_positions)
-
-        # Create DataFrame and handle interpolation
-        df_ball_positions = pd.DataFrame(
-            extracted_positions, columns=['x1', 'y1', 'x2', 'y2']
-        )
-        df_ball_positions = df_ball_positions.interpolate()  # Interpolate missing values
-        df_ball_positions = df_ball_positions.bfill()  # Backfill remaining missing values
-
-        # Convert back to the original format
-        ball_positions = [
-            {1: {"bbox": list(row)}} for row in df_ball_positions.itertuples(index=False)
+    def smooth_ball_positions(self, ball_positions):
+        # Extract ball center positions
+        centers = [
+            ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2) if bbox else (None, None)
+            for bbox in ball_positions
         ]
 
+        # Replace None values with the last valid position for Kalman filter input
+        valid_centers = []
+        last_valid = None
+        for center in centers:
+            if center[0] is not None:
+                valid_centers.append(center)
+                last_valid = center
+            else:
+                # If no valid position, use the last known valid position
+                valid_centers.append(last_valid if last_valid else (0, 0))  # Default to (0, 0) if no valid position yet
+
+        valid_centers = np.array(valid_centers)
+
+        # Adaptive Kalman filter parameters
+        transition_covariance = 1e-4 * np.eye(4)  # Smaller values for faster response
+        observation_covariance = 1e-1 * np.eye(2)  # Trust observations more
+
+        # Create Kalman filter
+        kf = KalmanFilter(
+            transition_matrices=[[1, 0, 1, 0], [0, 1, 0, 1], [0, 0, 1, 0], [0, 0, 0, 1]],
+            observation_matrices=[[1, 0, 0, 0], [0, 1, 0, 0]],
+            initial_state_mean=[valid_centers[0][0], valid_centers[0][1], 0, 0],
+            initial_state_covariance=1e-3 * np.eye(4),
+            transition_covariance=transition_covariance,
+            observation_covariance=observation_covariance,
+        )
+
+        # Train Kalman filter with valid observations
+        kf = kf.em(valid_centers, n_iter=10)
+
+        # Perform smoothing
+        smoothed_positions, _ = kf.smooth(valid_centers)
+
+        # Convert smoothed positions to bounding boxes
+        smoothed_ball_positions = []
+        for idx, center in enumerate(centers):
+            if center[0] is None:
+                # Use the smoothed position for missing frames
+                smoothed_center = smoothed_positions[idx]
+                smoothed_ball_positions.append([
+                    smoothed_center[0] - 10,  # Adjust bbox width
+                    smoothed_center[1] - 10,  # Adjust bbox height
+                    smoothed_center[0] + 10,
+                    smoothed_center[1] + 10
+                ])
+            else:
+                # For high-confidence detections, bypass Kalman filter
+                velocity = (
+                    np.linalg.norm(
+                        np.array(center) - np.array(smoothed_positions[idx - 1, :2])
+                    )
+                    if idx > 0
+                    else 0
+                )
+                if velocity > 75:  # Threshold for rapid updates
+                    smoothed_ball_positions.append([
+                        center[0] - 10,
+                        center[1] - 10,
+                        center[0] + 10,
+                        center[1] + 10
+                    ])
+                else:
+                    # Use the smoothed position
+                    smoothed_ball_positions.append([
+                        smoothed_positions[idx, 0] - 10,
+                        smoothed_positions[idx, 1] - 10,
+                        smoothed_positions[idx, 0] + 10,
+                        smoothed_positions[idx, 1] + 10
+                    ])
+
+        return smoothed_ball_positions
+
+
+
+    
+    def interpolate_ball_positions(self, ball_positions):
+        # Extract bounding boxes
+        extracted_positions = [
+            list(frame_data.values())[0].get('bbox', []) if frame_data else []
+            for frame_data in ball_positions
+        ]
+
+        print("Extracted ball positions before smoothing:", extracted_positions)
+
+        # Apply Kalman filter with prediction
+        smoothed_positions = self.smooth_ball_positions(extracted_positions)
+
+        # Rebuild ball positions in the expected format
+        ball_positions = [
+            {1: {"bbox": bbox}} if bbox else {} for bbox in smoothed_positions
+        ]
 
         return ball_positions
+
 
     def detect_frames(self, frames):
         batch_size=20
@@ -167,20 +243,29 @@ class Tracker:
         # print(f"Ellipse at: ({x_center}, {y_center}), Width: {width}, Height: {height}")  # Debugging
         return frame
     
-    def draw_triangle(self,frame,bbox,color):
-        y=int(bbox[1])
-        x,_ = get_center_of_bbox(bbox)
+    def draw_triangle(self, frame, bbox, color):
+        # Check if bbox is valid (no NaN values)
+        if any(np.isnan(coord) for coord in bbox):
+            print("Skipping drawing triangle due to invalid bbox:", bbox)
+            return frame
 
+        # Extract coordinates
+        y = int(bbox[1])
+        x, _ = get_center_of_bbox(bbox)
+
+        # Define triangle points
         triangle_points = np.array([
             [x, y],
-            [x-10, y-20],
-            [x+10, y-20]
+            [x - 10, y - 20],
+            [x + 10, y - 20]
         ], np.int32)
 
-        cv2.drawContours(frame, [triangle_points], 0, color,  cv2.FILLED)
+        # Draw the triangle
+        cv2.drawContours(frame, [triangle_points], 0, color, cv2.FILLED)
         cv2.drawContours(frame, [triangle_points], 0, (0, 0, 0), 2)
 
         return frame
+
 
     #     # Optional: draw a dot at the center for visual confirmation
     #     cv2.circle(frame, (x_center, y_center), 5, (0, 255, 255), -1)  # Yellow dot
