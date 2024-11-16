@@ -107,7 +107,7 @@ class Tracker:
             for frame_data in ball_positions
         ]
 
-        print("Extracted ball positions before smoothing:", extracted_positions)
+        # print("Extracted ball positions before smoothing:", extracted_positions)
 
         # Apply Kalman filter with prediction
         smoothed_positions = self.smooth_ball_positions(extracted_positions)
@@ -167,30 +167,7 @@ class Tracker:
 
 
 
-            # Convert to custom format
-            # detections_sv =[
-            #     (cls_names_inv[class_id], confidence, bbox) for xyxy, confidence, class_id, tracker_id in detections_sv
-            # ]
-            # yield frame_num, detections_sv
 
-
-    # def draw_ellipse(self, frame, bbox, color, track_id=None):
-    # # Calculate center and width
-    #     x_center, y_center = get_center_of_bbox(bbox)
-    #     width = get_bbox_width(bbox)
-    #     height = int(0.35 * width)  # Adjust height as needed
-
-    #     # Draw the ellipse
-    #     cv2.ellipse(
-    #         frame,
-    #         center=(100, 100),
-    #         axes=(50, 20),
-    #         angle=0,
-    #         startAngle=0,
-    #         endAngle=360,
-    #         color=(255, 0, 0),
-    #         thickness=2
-    #     )
 
     def draw_ellipse(self, frame, bbox, color, track_id=None):
         overlay = frame.copy()
@@ -267,12 +244,31 @@ class Tracker:
         return frame
 
 
+    def draw_team_ball_control(self,frame,frame_num,team_ball_control):
+        # Draw a semi-transparent rectaggle 
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (1350, 850), (1900,970), (255,255,255), -1 )
+        alpha = 0.4
+        cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+
+        team_ball_control_till_frame = team_ball_control[:frame_num+1]
+        # Get the number of time each team had ball control
+        team_1_num_frames = team_ball_control_till_frame[team_ball_control_till_frame==1].shape[0]
+        team_2_num_frames = team_ball_control_till_frame[team_ball_control_till_frame==2].shape[0]
+        team_1 = team_1_num_frames/(team_1_num_frames+team_2_num_frames)
+        team_2 = team_2_num_frames/(team_1_num_frames+team_2_num_frames)
+
+        cv2.putText(frame, f"Team 1 Ball Control: {team_1*100:.2f}%",(1400,900), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,0), 3)
+        cv2.putText(frame, f"Team 2 Ball Control: {team_2*100:.2f}%",(1400,950), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,0,0), 3)
+
+        return frame
+    
     #     # Optional: draw a dot at the center for visual confirmation
     #     cv2.circle(frame, (x_center, y_center), 5, (0, 255, 255), -1)  # Yellow dot
     #     return frame
 
         
-    def draw_annotations(self, video_frames, tracks):
+    def draw_annotations(self, video_frames, tracks,team_ball_control):
         output_video_frames = []
         for frame_num, frame in enumerate(video_frames):
             frame = frame.copy()  # Make a copy of the frame to avoid modifying the original
@@ -293,6 +289,8 @@ class Tracker:
             # Optionally, draw ellipses on the ball as well
             for track_id, ball in ball_dict.items():
                 frame = self.draw_triangle(frame, ball["bbox"], (0, 255, 0))
+            # Draw Team Ball Control
+            frame = self.draw_team_ball_control(frame, frame_num, team_ball_control)
 
             output_video_frames.append(frame)
 
