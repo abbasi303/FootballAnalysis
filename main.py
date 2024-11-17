@@ -1,5 +1,6 @@
 from camera_movement_estimator.camera_movement_estimator import CameraMovementEstimator
 from player_ball_assignment.player_ball_assigner import PlayerBallAssigner
+from speed_distance_estimator.speed_distance_estimator import SpeedAndDistance_Estimator
 from team_assigner.team_assigner import TeamAssigner
 from utils import read_video, save_video
 from trackers import Tracker
@@ -38,6 +39,12 @@ def main():
      
     view_transformer = ViewTransformer()
     view_transformer.add_transformed_position_to_tracks(tracks)
+
+
+
+    # Speed and distance estimator
+    speed_and_distance_estimator = SpeedAndDistance_Estimator()
+    speed_and_distance_estimator.add_speed_and_distance_to_tracks(tracks)
 
     # Assign Player Teams
 
@@ -85,7 +92,9 @@ def main():
     
     # Draw camera movement
     output_video_frames = camera_movement_estimator.draw_camera_movement(output_video_frames, camera_movement_per_frame)
-    
+  ## Draw Speed and Distance
+    speed_and_distance_estimator.draw_speed_and_distance(output_video_frames,tracks)
+  
     save_video(output_video_frames, 'output_videos/output_video.avi')
 
 
